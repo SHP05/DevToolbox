@@ -1,0 +1,714 @@
+Optimized tool selectionI’m tracing the regex tester flow in the feature files so I can explain the actual validation logic and where it lives in the code.
+
+Searched for regex `useRegexTester|new RegExp|isValid|matches\s*[:=]|validateRegex|RegexTesterPage` (`**/src/features/regex-tester/**`), 45 results
+
+Read 
+
+Read 
+
+Read 
+
+Read 
+
+## How the regex is validated and tested
+
+The flow is:
+
+1. The user types a pattern in `RegexTesterPage.tsx`
+2. The page reads the pattern, test text, and selected flags from the hook in `useRegexTester.ts`
+3. That hook recomputes the result with `useMemo(...)` by calling `testRegex(pattern, flags, testText)`
+4. The actual validation and matching logic is in `regexService.ts`
+
+---
+
+## Validation logic
+
+In `regexService.ts`, the function `testRegex` does this:
+
+- If the pattern is empty:
+  - returns `{ isValid: false, error: 'Pattern is empty.' }`
+- Otherwise it tries to build a real JavaScript regex:
+
+```ts
+regex = new RegExp(pattern, buildFlagsString(flags));
+```
+
+- This is the real validation step.
+- If `new RegExp(...)` throws, the code catches the error and marks it invalid:
+
+```ts
+catch (error) {
+  return {
+    isValid: false,
+    error: error instanceof Error ? error.message : 'Invalid regular expression.',
+    matches: [],
+  };
+}
+```
+
+So a regex is considered valid only if JavaScript successfully constructs it. This is the core validation rule.
+
+---
+
+## How flags are built
+
+The helper `buildFlagsString` in `regexService.ts` converts UI toggles like `g`, `i`, `m`, `s` into a JavaScript regex flags string.
+
+Example:
+
+- `global: true` → adds `g`
+- `ignoreCase: true` → adds `i`
+- `multiline: true` → adds `m`
+- `dotAll: true` → adds `s`
+
+Then it creates:
+
+```ts
+new RegExp(pattern, "gim s"?)
+```
+
+Actually it builds a string like `"gim"` or `"gi"` depending on the selected checkboxes.
+
+---
+
+## How matching is done
+
+After validation:
+
+- If the `global` flag is enabled, it uses `text.matchAll(regex)`
+- Otherwise it uses `regex.exec(text)`
+
+This is in the same function in `regexService.ts`.
+
+Pseudo-flow:
+
+```ts
+if (flags.global) {
+  for (const match of text.matchAll(regex)) {
+    matches.push(toRegexMatch(match));
+    if (matches.length >= MAX_MATCHES) break;
+  }
+} else {
+  const match = regex.exec(text);
+  if (match) matches.push(toRegexMatch(match));
+}
+```
+
+This means:
+
+- `g` flag → find all matches
+- no `g` flag → only first match
+
+There is also a guard:
+
+```ts
+const MAX_MATCHES = 10_000;
+```
+
+This prevents runaway matching on broken or pathological regexes.
+
+---
+
+## What is stored in the result
+
+`toRegexMatch(...)` converts each native JS match into a custom object:
+
+- `match`: the matched text
+- `index`: position in the input text
+- `groups`: captured groups
+- `namedGroups`: named capture groups if present
+
+This is used later for display and copy actions.
+
+---
+
+## How the UI shows validation result
+
+In `RegexTesterPage.tsx`, the input field is marked invalid when:
+
+```tsx
+error={hasContent && pattern.length > 0 && !result.isValid}
+```
+
+And the inline alert is shown by `RegexErrorMessage.tsx`:
+
+- If there is a pattern and `result.isValid` is false, it shows the error message
+- Otherwise it hides the alert
+
+The toolbar in `RegexToolbar.tsx` also shows:
+
+- “Invalid regex” when invalid
+- Number of matches when valid
+
+---
+
+## Summary
+
+The regex is validated in one place:
+
+- `regexService.ts`
+
+The sequence is:
+
+1. Convert checked flags into JS flags string
+2. Construct `new RegExp(pattern, flags)`
+3. If that throws → invalid regex
+4. If valid → run against the test text
+5. Collect matches
+6. Show match list/highlighted output in UI
+
+If you want, I can also walk through one example like:
+- pattern: `\d+`
+- test text: `abc123xyz456`
+- flags: `g`
+and show exactly how the result object is created step by step.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+I’m mapping the formatter flow in the SQL and JSON feature folders so I can explain the exact validation, formatting, and UI behavior in the same step-by-step way.
+
+Searched for regex `useSqlFormatter|formatSql|sqlService|isValid|parse|format|useJsonFormatter|jsonService|JSON.parse|stringify` (`**/src/features/{sql-formatter,json-formatter}/**`), 205 results
+
+Read 
+
+Read 
+
+Read 
+
+Read 
+
+Read 
+
+Read 
+
+## SQL Formatter flow
+
+The SQL formatter works in a simple pipeline:
+
+1. User types SQL in the input editor  
+   See `SqlFormatterPage.tsx`
+
+2. The page calls the hook `useSqlFormatter`  
+   See `useSqlFormatter.ts`
+
+   This hook keeps:
+   - `input` = raw SQL text
+   - `output` = formatted SQL result
+   - `indent` = indentation size
+   - `keywordCase` = uppercase / lowercase / preserve
+
+   The important part is:
+
+   ```ts
+   const validation = useMemo(
+     () => formatSql(input, { indent, keywordCase }),
+     [input, indent, keywordCase],
+   );
+   ```
+
+   So every time the user edits SQL or changes formatting options, the hook re-validates and re-formats the query.
+
+3. The real formatting and validation happens in the service  
+   See `sqlService.ts`
+
+   Function `formatSql(input, options)` does:
+   - checks if input is empty or whitespace
+   - if empty, returns invalid result
+   - otherwise calls `format(input, { language: 'tsql', tabWidth: indent, keywordCase })`
+   - this comes from the `sql-formatter` library
+   - if the library throws a parse error, it catches it and returns the first line of the error message
+
+   Example logic:
+
+   ```ts
+   if (input.trim() === '') {
+     return { output: '', isValid: false, error: 'Input is empty.' };
+   }
+
+   try {
+     const output = format(input, {
+       language: 'tsql',
+       tabWidth: options.indent,
+       keywordCase: options.keywordCase,
+     });
+     return { output, isValid: true };
+   } catch (error) {
+     return { output: '', isValid: false, error: firstErrorLine(error) };
+   }
+   ```
+
+4. The UI decides what to show  
+   See `SqlToolbar.tsx` and `SqlErrorMessage.tsx`
+
+   - If SQL is invalid, it shows an error message
+   - If valid, it shows a success chip like “Valid SQL”
+   - The Format button only works when there is content
+   - The output area is populated only if the validation passed
+
+5. Button behavior  
+   In the hook:
+
+   ```ts
+   const format = () => {
+     setOutput(validation.isValid ? validation.output : '');
+   };
+   ```
+
+   So the output is shown only when formatting succeeds. If SQL is invalid, output stays empty.
+
+### SQL complete flow
+User input → `useSqlFormatter` → `formatSql` in service → `sql-formatter` library parses and prettifies → UI shows formatted SQL or error
+
+---
+
+## JSON Formatter flow
+
+The JSON formatter follows the same pattern, but with validation, formatting, and minify actions.
+
+1. User types JSON in the input editor  
+   See `JsonFormatterPage.tsx`
+
+2. Hook manages state  
+   See `useJsonFormatter.ts`
+
+   It holds:
+   - `input`
+   - `output`
+   - `indent`
+   - `validation` from `validateJson(input)`
+   - `stats` from `computeJsonStats(input)`
+
+   Important logic:
+
+   ```ts
+   const validation = useMemo(() => validateJson(input), [input]);
+   const stats = useMemo(() => computeJsonStats(input), [input]);
+   ```
+
+   So every keystroke updates validation and stats.
+
+3. Validation is done in the service  
+   See `jsonService.ts`
+
+   `validateJson(input)`:
+   - rejects empty or whitespace-only input
+   - calls `JSON.parse(input)`
+   - if parsing succeeds, JSON is valid
+   - if parsing throws, it converts the JS error into a readable UI-friendly message with line/column info
+
+   Example:
+
+   ```ts
+   export function validateJson(input: string): JsonProcessResult {
+     if (input.trim() === '') {
+       return { output: '', isValid: false, error: { message: 'Input is empty.' } };
+     }
+
+     try {
+       JSON.parse(input);
+       return { output: input, isValid: true };
+     } catch (error) {
+       return { output: '', isValid: false, error: parseJsonError(error, input) };
+     }
+   }
+   ```
+
+4. Formatting and minify logic  
+   In the same service:
+
+   - `formatJson(input, indent)`:
+     - parses JSON
+     - returns `JSON.stringify(parsed, null, indent)`
+
+   - `minifyJson(input)`:
+     - parses JSON
+     - returns `JSON.stringify(parsed)` with no spacing
+
+   Both do the same validation-first process:
+
+   ```ts
+   try {
+     const parsed = JSON.parse(input);
+     return { output: JSON.stringify(parsed, null, indent), isValid: true };
+   } catch (error) {
+     return { output: '', isValid: false, error: parseJsonError(error, input) };
+   }
+   ```
+
+5. Error detail parsing  
+   The helper `parseJsonError(error, input)` converts browser JSON parse messages into:
+   - message
+   - line
+   - column
+
+   This is important because JavaScript errors often include text like:
+   - `position 12`
+   - `line 3 column 10`
+
+   The app converts this into a cleaner message for UI.
+
+6. Button actions in the hook  
+   See `useJsonFormatter.ts`
+
+   - `format()` runs `formatJson(input, indent)`
+   - `minify()` runs `minifyJson(input)`
+   - Both only set output when the result is valid
+
+   Example:
+
+   ```ts
+   const format = () => {
+     const result = formatJson(input, indent);
+     setOutput(result.isValid ? result.output : '');
+   };
+   ```
+
+7. UI feedback  
+   See `ValidationMessage.tsx` and `JsonToolbar.tsx`
+
+   - If JSON is invalid, it shows the error
+   - If valid, it shows “Valid JSON”
+   - Format and Minify buttons update the output area
+
+### JSON complete flow
+User input → `useJsonFormatter` → `validateJson` / `formatJson` / `minifyJson` → `JSON.parse` validation → formatted or minified output → UI shows result or error
+
+---
+
+## Overall flow pattern in both features
+
+Both tools follow the same architecture:
+
+- Page component captures input
+- Hook stores state and triggers logic
+- Service validates/format as the core logic
+- UI renders success/error output
+
+That pattern is consistent in:
+- `SqlFormatterPage.tsx`
+- `useSqlFormatter.ts`
+- `sqlService.ts`
+
+and
+
+- `JsonFormatterPage.tsx`
+- `useJsonFormatter.ts`
+- `jsonService.ts`
+
+If you want, I can next explain this in a diagram-style flow with “Input → Hook → Service → Output” for both tools together.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+I’m tracing the text comparator feature now so I can explain the exact compare logic, diff generation, and UI flow in the same pattern.
+
+Read 
+
+Read 
+
+Read 
+
+Read 
+
+## Text Comparator flow
+
+The text comparison feature follows the same pattern as the other tools:
+
+Input → Hook state → Diff service → UI rendering
+
+The main files are:
+
+- `useTextComparator.ts`
+- `diffService.ts`
+- `TextComparatorPage.tsx`
+- `DiffView.tsx`
+
+---
+
+## 1) Hook stores the two texts and comparison options
+
+In `useTextComparator.ts`, the hook keeps:
+
+- `original`: first text block
+- `changed`: second text block
+- `options`:
+  - `ignoreWhitespace`
+  - `ignoreCase`
+
+Then it does:
+
+```ts
+const diffLines = useMemo(
+  () => computeLineDiff(original, changed, options),
+  [original, changed, options],
+);
+```
+
+This means every time the user edits text or toggles options, the diff is recomputed.
+
+It also derives:
+
+```ts
+const stats = useMemo(() => computeDiffStats(diffLines), [diffLines]);
+```
+
+So summary counts like additions/deletions/unchanged lines are calculated from the diff result.
+
+---
+
+## 2) Comparison logic is in the service
+
+The real logic lives in `diffService.ts`.
+
+### Step A: split text into lines
+
+```ts
+function splitIntoLines(text: string): string[] {
+  return text.split(/\r\n|\r|\n/);
+}
+```
+
+This breaks both text inputs into arrays of lines so the tool can compare line-by-line instead of character-by-character.
+
+---
+
+### Step B: build comparator based on options
+
+```ts
+function buildLineComparator(options: DiffOptions): ((a: string, b: string) => boolean) | undefined {
+  if (!options.ignoreWhitespace && !options.ignoreCase) return undefined;
+```
+
+If neither option is checked, it leaves the default comparator as `undefined`, so JS diff compares raw lines normally.
+
+If either option is enabled, it normalizes lines before comparing:
+
+```ts
+if (options.ignoreWhitespace) {
+  left = left.trim();
+  right = right.trim();
+}
+if (options.ignoreCase) {
+  left = left.toLowerCase();
+  right = right.toLowerCase();
+}
+return left === right;
+```
+
+That means:
+
+- ignore whitespace: trims spaces around each line before comparing
+- ignore case: makes comparison case-insensitive
+
+---
+
+### Step C: compute line-by-line diff
+
+```ts
+const changes = diffArrays(originalLines, changedLines, comparator ? { comparator } : undefined);
+```
+
+This uses the `diff` library (`jsdiff`) to compare the arrays of lines.
+
+Important point:
+
+- it compares whole lines as tokens
+- each diff “part” can be:
+  - added
+  - removed
+  - unchanged
+
+Then it converts each part into a `DiffLine` object:
+
+```ts
+const type: DiffLineType = part.added ? 'added' : part.removed ? 'removed' : 'unchanged';
+for (const value of part.value) {
+  lines.push({ type, value });
+}
+```
+
+So each line ends up looking like:
+
+```ts
+{ type: 'added' | 'removed' | 'unchanged', value: 'line content' }
+```
+
+This is a line-based diff, which is the correct shape for a text comparison tool.
+
+---
+
+## 3) Empty input behavior
+
+At the start of `computeLineDiff`:
+
+```ts
+if (original === '' && changed === '') {
+  return [];
+}
+```
+
+If both sides are empty, there is nothing to compare, so it returns an empty list.
+
+That is why the UI can show a “Enter text on both sides…” message in `DiffView.tsx`.
+
+---
+
+## 4) Stats calculation
+
+In the same service, `computeDiffStats` aggregates the grouped lines:
+
+```ts
+if (line.type === 'added') acc.additions += 1;
+else if (line.type === 'removed') acc.deletions += 1;
+else acc.unchanged += 1;
+```
+
+So the toolbar can show:
+
+- additions
+- deletions
+- unchanged lines
+
+This is used by `DiffToolbar.tsx`.
+
+---
+
+## 5) Copying diff as text
+
+The helper `formatDiffAsText` creates a plain-text diff representation:
+
+```ts
+const prefix = line.type === 'added' ? '+ ' : line.type === 'removed' ? '- ' : '  ';
+return `${prefix}${line.value}`;
+```
+
+So output becomes something like:
+
+- `+ new line`
+- `- old line`
+- `  unchanged line`
+
+This is used when the “Copy diff” action is triggered from the toolbar.
+
+---
+
+## 6) UI rendering flow
+
+The page in `TextComparatorPage.tsx` renders:
+
+- left editor: original text
+- right editor: changed text
+- bottom panel: diff result
+
+It passes the diff result into `DiffView.tsx`, which color-codes each line:
+
+- green for added
+- red for removed
+- neutral for unchanged
+
+The component uses:
+
+```ts
+const BACKGROUNDS: Record<DiffLine['type'], { light: string; dark: string }> = {
+  added: { light: '#e6ffed', dark: 'rgba(46, 160, 67, 0.2)' },
+  removed: { light: '#ffebe9', dark: 'rgba(248, 81, 73, 0.2)' },
+  unchanged: { light: 'transparent', dark: 'transparent' },
+};
+```
+
+and prefixes:
+
+```ts
+const PREFIX: Record<DiffLine['type'], string> = {
+  added: '+',
+  removed: '-',
+  unchanged: ' ',
+};
+```
+
+This makes the diff visually readable.
+
+---
+
+## 7) End-to-end logic
+
+The full flow is:
+
+1. User types text in the left and right editors  
+   `TextComparatorPage.tsx`
+
+2. The hook updates state and recomputes diff  
+   `useTextComparator.ts`
+
+3. Diff service splits into lines and compares using `jsdiff`  
+   `diffService.ts`
+
+4. Each line is labeled as added / removed / unchanged
+
+5. Stats are computed and displayed in toolbar
+
+6. DiffView renders the marked-up result in the UI
+
+---
+
+## In one sentence
+
+The text comparator is a line-based diff tool: it splits both texts into lines, optionally normalizes them for case/whitespace rules, compares them with the `diff` library, groups changes as added/removed/unchanged, and renders the result visually while also providing summary stats and copyable diff output.
+
+If you want, I can next explain the same thing as a diagram with arrows like:
+User input → Hook → diffArrays → DiffView → output.
