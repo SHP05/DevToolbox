@@ -43,7 +43,7 @@ describe('TextComparatorPage', () => {
     await user.click(changed);
     await user.type(changed, 'world');
 
-    const diffResult = screen.getByRole('log', { name: 'Diff result' });
+    const diffResult = screen.getByRole('log', { name: 'Difference result' });
     expect(within(diffResult).getByText('hello')).toBeInTheDocument();
     expect(within(diffResult).getByText('world')).toBeInTheDocument();
   });

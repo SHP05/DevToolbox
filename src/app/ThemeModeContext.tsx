@@ -14,11 +14,10 @@ interface ThemeModeContextValue {
 const ThemeModeContext = createContext<ThemeModeContextValue | undefined>(undefined);
 
 function getInitialMode(): ThemeMode {
-  if (typeof window === 'undefined') return 'light';
+  if (typeof window === 'undefined') return 'dark';
   const stored = window.localStorage.getItem(STORAGE_KEY);
   if (stored === 'light' || stored === 'dark') return stored;
-  const prefersDark = window.matchMedia?.('(prefers-color-scheme: dark)').matches;
-  return prefersDark ? 'dark' : 'light';
+  return 'dark';
 }
 
 export function ThemeModeProvider({ children }: { children: ReactNode }) {

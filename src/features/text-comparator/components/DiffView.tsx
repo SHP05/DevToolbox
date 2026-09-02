@@ -43,7 +43,7 @@ export function DiffView({ lines }: DiffViewProps) {
       variant="outlined"
       component="div"
       role="log"
-      aria-label="Diff result"
+      aria-label="Difference result"
       sx={{
         height: '100%',
         minHeight: 260,

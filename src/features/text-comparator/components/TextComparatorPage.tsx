@@ -70,7 +70,7 @@ export function TextComparatorPage() {
           </EditorPanel>
         </Box>
 
-        <EditorPanel title="Diff Result">
+        <EditorPanel title="Difference Result">
           <DiffView lines={diffLines} />
         </EditorPanel>
       </Stack>
